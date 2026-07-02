@@ -10,7 +10,6 @@ out/
 *.ipr
 .vscode/
 
-
 ### Operating System Noise ###
 log/
 *.log
