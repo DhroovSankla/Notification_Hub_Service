@@ -16,3 +16,6 @@ log/
 *.log
 .DS_Store
 Thumbs.db
+
+# Local Environment Variables Configuration Matrix
+.env

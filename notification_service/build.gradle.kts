@@ -46,3 +46,16 @@ dependencies {
 tasks.withType<Test> {
     useJUnitPlatform()
 }
+
+// Automatically parse and inject local environment variables before executing tasks
+tasks.withType<org.springframework.boot.gradle.tasks.run.BootRun> {
+    val envFile = file(".env")
+    if (envFile.exists()) {
+        envFile.readLines().forEach { line ->
+            if (line.isNotBlank() && !line.startsWith("#") && line.contains("=")) {
+                val parts = line.split("=", limit = 2)
+                environment(parts[0].trim(), parts[1].trim())
+            }
+        }
+    }
+}
