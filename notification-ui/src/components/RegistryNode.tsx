@@ -1,4 +1,3 @@
-import React from 'react';
 import { User, Mail, Hash, BookOpen, Send, CheckCircle, Terminal } from 'lucide-react';
 
 interface RegistryNodeProps {
@@ -16,7 +15,6 @@ interface RegistryNodeProps {
   setSelectedTemplate: (template: string) => void;
   regStatus: { loading: boolean; error: string | null; success: boolean };
   handleRegistration: (e: React.FormEvent) => void;
-  role: string | null;
 }
 
 export default function RegistryNode({
@@ -33,8 +31,7 @@ export default function RegistryNode({
   selectedTemplate,
   setSelectedTemplate,
   regStatus,
-  handleRegistration,
-  role
+  handleRegistration
 }: RegistryNodeProps) {
   return (
     <div className="w-full max-w-md space-y-6 relative z-10 font-mono">

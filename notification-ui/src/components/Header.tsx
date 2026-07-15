@@ -1,4 +1,3 @@
-import React from 'react';
 import { Layers, LogOut } from 'lucide-react';
 
 interface HeaderProps {

@@ -1,4 +1,3 @@
-import React from 'react';
 import { Activity, AlertTriangle } from 'lucide-react';
 
 interface QuarantineZoneProps {
@@ -6,15 +5,13 @@ interface QuarantineZoneProps {
   toggleFaultMode: () => void;
   dlqEvents: string[];
   replayDlqEvents: () => void;
-  dlqLoading: boolean;
 }
 
 export default function QuarantineZone({
   faultModeActive,
   toggleFaultMode,
   dlqEvents,
-  replayDlqEvents,
-  dlqLoading
+  replayDlqEvents
 }: QuarantineZoneProps) {
   return (
     <div className="w-full max-w-md space-y-4 pt-8 border-t border-zinc-900 font-mono">

@@ -1,4 +1,3 @@
-import React from 'react';
 import { User, Key, Shield, Layers } from 'lucide-react';
 
 interface LoginViewProps {

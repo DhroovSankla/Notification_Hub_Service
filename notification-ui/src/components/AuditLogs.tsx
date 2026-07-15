@@ -1,4 +1,3 @@
-import React from 'react';
 import { FileSpreadsheet, RefreshCw, Search, Filter, Smartphone, Bell, Mail, Eye } from 'lucide-react';
 
 interface AuditLog {

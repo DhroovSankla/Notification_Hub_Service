@@ -270,7 +270,6 @@ export default function App() {
   // DLQ / Simulation State
   const [faultModeActive, setFaultModeActive] = useState(false);
   const [dlqEvents, setDlqEvents] = useState<string[]>([]);
-  const [dlqLoading, setDlqLoading] = useState(false);
 
   const fetchFaultStatus = async () => {
     if (role !== 'ROLE_ADMIN' || !token) return;
@@ -289,7 +288,6 @@ export default function App() {
   const fetchDlqEvents = async () => {
     if (role !== 'ROLE_ADMIN' || !token) return;
     try {
-      setDlqLoading(true);
       const res = await fetch(`${NOTIFICATION_API}/api/dlq/events`, {
         headers: { 'Authorization': `Bearer ${token}` },
         cache: 'no-store'
@@ -298,9 +296,7 @@ export default function App() {
         const data = await res.json();
         setDlqEvents(data);
       }
-    } finally {
-      setDlqLoading(false);
-    }
+    } catch (e) {}
   };
 
   const fetchAuditLogs = async () => {
@@ -455,7 +451,6 @@ export default function App() {
               setSelectedTemplate={setSelectedTemplate}
               regStatus={regStatus}
               handleRegistration={handleRegistration}
-              role={role}
             />
 
             {role === 'ROLE_ADMIN' && (
@@ -464,7 +459,6 @@ export default function App() {
                 toggleFaultMode={toggleFaultMode}
                 dlqEvents={dlqEvents}
                 replayDlqEvents={replayDlqEvents}
-                dlqLoading={dlqLoading}
               />
             )}
           </section>
