@@ -29,8 +29,10 @@ public class JwtUtils {
 
     // Generate a new token for a authenticated user
     public String generateJwtToken(String username) {
+        String role = (username.equalsIgnoreCase("admin") || username.toLowerCase().contains("admin")) ? "ROLE_ADMIN" : "ROLE_OPERATOR";
         return Jwts.builder()
                 .subject(username)
+                .claim("role", role)
                 .issuedAt(new Date())
                 .expiration(new Date(System.currentTimeMillis() + jwtExpirationMs))
                 .signWith(getSigningKey())
@@ -45,6 +47,16 @@ public class JwtUtils {
                 .parseSignedClaims(token)
                 .getPayload()
                 .getSubject();
+    }
+
+    // Extract the role claim from an active token
+    public String getRoleFromJwtToken(String token) {
+        return Jwts.parser()
+                .verifyWith(getSigningKey())
+                .build()
+                .parseSignedClaims(token)
+                .getPayload()
+                .get("role", String.class);
     }
 
     // Validate token integrity and expiration states

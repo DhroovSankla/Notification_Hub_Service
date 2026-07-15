@@ -1,7 +1,14 @@
 @import "tailwindcss";
 
+@theme {
+  --color-black: #0c0c0e;
+  --color-white: #e4e4e7;
+  --color-zinc-950: #141416;
+  --color-zinc-900: #202024;
+}
+
 @layer base {
   body {
-    @apply bg-black text-slate-50 min-h-screen antialiased selection:bg-red-600/30;
+    @apply bg-black text-zinc-200 min-h-screen antialiased selection:bg-zinc-800;
   }
 }

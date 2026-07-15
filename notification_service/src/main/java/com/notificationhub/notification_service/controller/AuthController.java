@@ -19,9 +19,26 @@ public class AuthController {
     @PostMapping("/login")
     public ResponseEntity<?> authenticateUser(@RequestBody Map<String, String> loginRequest) {
         String username = loginRequest.get("username");
+        String password = loginRequest.get("password");
 
         if (username == null || username.trim().isEmpty()) {
-            return ResponseEntity.badRequest().body("Username is required");
+            return ResponseEntity.badRequest().body(Map.of("message", "Username is required"));
+        }
+        if (password == null || password.trim().isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of("message", "Password is required"));
+        }
+
+        // Simple validation rule:
+        // admin -> password: admin
+        // anyone else -> password: operator
+        if ("admin".equalsIgnoreCase(username)) {
+            if (!"admin".equals(password)) {
+                return ResponseEntity.status(401).body(Map.of("message", "Invalid admin credentials"));
+            }
+        } else {
+            if (!"operator".equals(password)) {
+                return ResponseEntity.status(401).body(Map.of("message", "Invalid operator credentials. Standard password is 'operator'."));
+            }
         }
 
         // Generate a cryptographically signed JWT token for the user
@@ -32,6 +49,21 @@ public class AuthController {
         response.put("token", token);
         response.put("type", "Bearer");
 
+        return ResponseEntity.ok(response);
+    }
+
+    // Google Sign-In Simulation Endpoint
+    @PostMapping("/google-login")
+    public ResponseEntity<?> authenticateGoogleUser(@RequestBody Map<String, String> googleRequest) {
+        String username = googleRequest.get("username");
+        if (username == null || username.trim().isEmpty()) {
+            username = "google_operator";
+        }
+
+        String token = jwtUtils.generateJwtToken(username);
+        Map<String, String> response = new HashMap<>();
+        response.put("token", token);
+        response.put("type", "Bearer");
         return ResponseEntity.ok(response);
     }
 }

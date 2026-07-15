@@ -14,4 +14,8 @@ public class NotificationEvent {
     private String channel; // e.g., EMAIL, SMS, PUSH
     private String messageSubject;
     private String messageBody;
+    private String studentName;
+    private String rollNumber;
+    private String department;
+    private String templateType;
 }

@@ -32,11 +32,14 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             // 2. Validate the token signature and expiration state
             if (jwt != null && jwtUtils.validateJwtToken(jwt)) {
                 String username = jwtUtils.getUsernameFromJwtToken(jwt);
+                String role = jwtUtils.getRoleFromJwtToken(jwt);
 
                 // 3. Create an internal Spring Security authentication object
-                // We pass Collections.emptyList() for now since roles aren't implemented yet
+                java.util.List<org.springframework.security.core.authority.SimpleGrantedAuthority> authorities = 
+                    java.util.Collections.singletonList(new org.springframework.security.core.authority.SimpleGrantedAuthority(role != null ? role : "ROLE_OPERATOR"));
+
                 UsernamePasswordAuthenticationToken authentication =
-                        new UsernamePasswordAuthenticationToken(username, null, Collections.emptyList());
+                        new UsernamePasswordAuthenticationToken(username, null, authorities);
 
                 authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
 

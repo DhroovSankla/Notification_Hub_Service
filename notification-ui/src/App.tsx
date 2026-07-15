@@ -1,5 +1,15 @@
-import React, { useState } from 'react';
-import { Bell, Shield, LogOut, Terminal, RefreshCw, Layers } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Client } from '@stomp/stompjs';
+import SockJS from 'sockjs-client';
+
+// Component Imports
+import Header from './components/Header';
+import Footer from './components/Footer';
+import LoginView from './components/LoginView';
+import RegistryNode from './components/RegistryNode';
+import QuarantineZone from './components/QuarantineZone';
+import LiveFeed from './components/LiveFeed';
+import AuditLogs from './components/AuditLogs';
 
 interface NotificationEvent {
   eventId: string;
@@ -7,203 +17,486 @@ interface NotificationEvent {
   channel: string;
   messageSubject: string;
   messageBody: string;
+  studentName?: string;
+  rollNumber?: string;
+  department?: string;
+  templateType?: string;
 }
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8082';
+interface AuditLog {
+  id: number;
+  eventId: string;
+  recipient: string;
+  channel: string;
+  templateType: string;
+  status: string;
+  timestamp: string;
+  payload: string;
+}
+
+const REGISTRY_API = import.meta.env.VITE_REGISTRY_API || 'http://localhost:8080';
+const NOTIFICATION_API = import.meta.env.VITE_NOTIFICATION_API || 'http://localhost:8082';
 
 export default function App() {
   const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [token, setToken] = useState<string | null>(localStorage.getItem('jwt_token'));
-  const [isLoggedIn, setIsLoggedIn] = useState(!!localStorage.getItem('jwt_token'));
   
-  const [searchEventId, setSearchEventId] = useState('evt_100239');
-  const [cachedEvent, setCachedEvent] = useState<NotificationEvent | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const parseJwtRole = (jwtToken: string | null) => {
+    if (!jwtToken) return null;
+    try {
+      const base64Url = jwtToken.split('.')[1];
+      const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+      const jsonPayload = decodeURIComponent(atob(base64).split('').map(function(c) {
+          return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+      }).join(''));
+      return JSON.parse(jsonPayload).role;
+    } catch (e) {
+      return null;
+    }
+  };
+
+  const [role, setRole] = useState<string | null>(parseJwtRole(localStorage.getItem('jwt_token')));
+  const [isLoggedIn, setIsLoggedIn] = useState(!!localStorage.getItem('jwt_token'));
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [googleLoading, setGoogleLoading] = useState(false);
+
+  // Tabs and Layout State
+  const [activeTab, setActiveTab] = useState<'cockpit' | 'audit'>('cockpit');
+
+  // Student Registration State
+  const [studentName, setStudentName] = useState('');
+  const [studentEmail, setStudentEmail] = useState('');
+  const [studentRoll, setStudentRoll] = useState('');
+  const [studentDept, setStudentDept] = useState('');
+  const [selectedChannel, setSelectedChannel] = useState('EMAIL');
+  const [selectedTemplate, setSelectedTemplate] = useState('WELCOME');
+  
+  const [regStatus, setRegStatus] = useState<{ loading: boolean; error: string | null; success: boolean }>({
+    loading: false, error: null, success: false
+  });
+
+  // Live Feed State
+  const [liveEvents, setLiveEvents] = useState<NotificationEvent[]>([]);
+  const [isConnected, setIsConnected] = useState(false);
+
+  // Audit Logs State
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [auditQuery, setAuditQuery] = useState('');
+  const [auditStatus, setAuditStatus] = useState('ALL');
+  const [auditChannel, setAuditChannel] = useState('ALL');
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [inspectedLog, setInspectedLog] = useState<AuditLog | null>(null);
+
+  // WebSocket Connection
+  useEffect(() => {
+    if (!isLoggedIn) return;
+
+    const socket = new SockJS(`${NOTIFICATION_API}/ws-notifications`);
+    const stompClient = new Client({
+      webSocketFactory: () => socket,
+      debug: (str) => console.log(str),
+      onConnect: () => {
+        setIsConnected(true);
+        stompClient.subscribe('/topic/live-events', (message) => {
+          if (message.body) {
+            const event: NotificationEvent = JSON.parse(message.body);
+            setLiveEvents(prev => [event, ...prev]);
+            if (activeTab === 'audit') fetchAuditLogs();
+          }
+        });
+      },
+      onStompError: (frame) => {
+        console.error('Broker reported error: ' + frame.headers['message']);
+        setIsConnected(false);
+      },
+      onWebSocketClose: () => {
+        setIsConnected(false);
+      }
+    });
+
+    stompClient.activate();
+
+    return () => {
+      stompClient.deactivate();
+    };
+  }, [isLoggedIn, activeTab]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!username.trim()) return;
+    if (!username.trim() || !password.trim()) return;
 
     try {
-      setError(null);
-      const res = await fetch(`${API_BASE}/api/auth/login`, {
+      setAuthError(null);
+      const res = await fetch(`${NOTIFICATION_API}/api/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username })
+        body: JSON.stringify({ username, password })
       });
       
-      if (!res.ok) throw new Error('Authentication gateway rejected connection.');
-      
       const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.message || 'Authentication gateway rejected connection.');
+      }
+      
       if (data.token) {
         localStorage.setItem('jwt_token', data.token);
         setToken(data.token);
+        setRole(parseJwtRole(data.token));
         setIsLoggedIn(true);
       }
     } catch (err: any) {
-      setError(err.message || 'Failed to connect to backend service.');
+      setAuthError(err.message || 'Failed to connect to backend service.');
     }
+  };
+
+  const handleGoogleLogin = () => {
+    setGoogleLoading(true);
+    setAuthError(null);
+
+    const popupWidth = 500;
+    const popupHeight = 600;
+    const left = window.screen.width / 2 - popupWidth / 2;
+    const top = window.screen.height / 2 - popupHeight / 2;
+    
+    const oauthPopup = window.open(
+      "", 
+      "Google Sign-In Consent", 
+      `width=${popupWidth},height=${popupHeight},top=${top},left=${left},resizable=yes,scrollbars=yes`
+    );
+
+    if (!oauthPopup) {
+      setGoogleLoading(false);
+      setAuthError("Popup blocked! Please allow popups for Google Sign-In simulation.");
+      return;
+    }
+
+    oauthPopup.document.write(`
+      <html>
+        <head>
+          <title>Sign in with Google</title>
+          <script src="https://cdn.tailwindcss.com"></script>
+        </head>
+        <body class="bg-black text-slate-100 font-mono p-6 flex flex-col items-center justify-between h-screen border border-zinc-950">
+          <div class="w-full text-center space-y-4">
+            <div class="flex justify-center mt-6">
+              <svg class="h-12 w-12" viewBox="0 0 24 24">
+                <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v3.9h6.69c-.29 1.5-.114 2.82-.977 3.78l3.07 2.38c1.8-1.66 2.84-4.1 2.84-7.01z"/>
+                <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.07-2.38c-.9.6-2.06.96-3.23.96-2.5 0-4.61-1.69-5.36-3.97L1.13 19.39C3.11 23.3 7.23 24 12 24z"/>
+                <path fill="#FBBC05" d="M6.64 15.7c-.2-.6-.31-1.24-.31-1.9s.11-1.3.31-1.9L1.13 8.01C.41 9.47 0 11.19 0 13s.41 3.53 1.13 4.99l5.51-4.29z"/>
+                <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.43-3.43C17.95 1.19 15.24 0 12 0 7.23 0 3.11 2.7 1.13 6.61l5.51 4.29c.75-2.28 2.86-6.15 5.36-6.15z"/>
+              </svg>
+            </div>
+            <h1 class="text-sm font-bold uppercase tracking-widest text-white">OAuth Verification Request</h1>
+            <p class="text-[11px] text-zinc-500">Simulating OAuth 2.0 authorization code flow</p>
+          </div>
+
+          <div class="w-full bg-zinc-950 p-4 rounded-lg border border-zinc-900 space-y-3">
+            <h2 class="text-[9px] uppercase text-zinc-500 tracking-widest text-center font-bold">Simulated Enterprise Accounts</h2>
+            <button onclick="selectAccount('google_operator@ops.enterprise.com')" class="w-full flex items-center justify-between p-3 rounded bg-black border border-zinc-900 hover:border-white transition-all text-left">
+              <div>
+                <p class="text-xs font-bold text-white">Google Operator</p>
+                <p class="text-[9px] text-zinc-500">google_operator@ops.enterprise.com</p>
+              </div>
+              <span class="text-[9px] font-bold px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-white uppercase tracking-widest">Select</span>
+            </button>
+            <button onclick="selectAccount('google_admin@ops.enterprise.com')" class="w-full flex items-center justify-between p-3 rounded bg-black border border-zinc-900 hover:border-white transition-all text-left">
+              <div>
+                <p class="text-xs font-bold text-white">Google Administrator</p>
+                <p class="text-[9px] text-zinc-500 font-mono">google_admin@ops.enterprise.com</p>
+              </div>
+              <span class="text-[9px] font-bold px-2 py-0.5 rounded bg-white text-black border border-white uppercase tracking-widest">Select</span>
+            </button>
+          </div>
+
+          <div class="mb-4 text-center">
+            <p class="text-[8px] text-zinc-700">Enterprise simulation environment matching OAuth 2.0 specs.</p>
+          </div>
+
+          <script>
+            function selectAccount(email) {
+              const username = email.split('@')[0];
+              window.opener.postMessage({ type: 'GOOGLE_OAUTH_SUCCESS', username: username }, '*');
+              window.close();
+            }
+          </script>
+        </body>
+      </html>
+    `);
+
+    const handleOauthMessage = async (event: MessageEvent) => {
+      if (event.data && event.data.type === 'GOOGLE_OAUTH_SUCCESS') {
+        const usernameParam = event.data.username;
+        try {
+          const res = await fetch(`${NOTIFICATION_API}/api/auth/google-login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username: usernameParam })
+          });
+          
+          if (!res.ok) throw new Error("Google Authentication failed on backend gateway.");
+          
+          const data = await res.json();
+          if (data.token) {
+            localStorage.setItem('jwt_token', data.token);
+            setToken(data.token);
+            setRole(parseJwtRole(data.token));
+            setIsLoggedIn(true);
+          }
+        } catch (err: any) {
+          setAuthError(err.message || 'Google Auth Connection failed.');
+        } finally {
+          setGoogleLoading(false);
+          window.removeEventListener('message', handleOauthMessage);
+        }
+      }
+    };
+
+    window.addEventListener('message', handleOauthMessage);
   };
 
   const handleLogout = () => {
     localStorage.removeItem('jwt_token');
     setToken(null);
+    setRole(null);
     setIsLoggedIn(false);
-    setCachedEvent(null);
+    setLiveEvents([]);
+    setIsConnected(false);
+    setPassword('');
+    setUsername('');
+    setActiveTab('cockpit');
   };
 
-  const fetchCachedNotification = async () => {
-    if (!token || !searchEventId.trim()) return;
-    setLoading(true);
-    setError(null);
-    setCachedEvent(null);
+  // DLQ / Simulation State
+  const [faultModeActive, setFaultModeActive] = useState(false);
+  const [dlqEvents, setDlqEvents] = useState<string[]>([]);
+  const [dlqLoading, setDlqLoading] = useState(false);
 
+  const fetchFaultStatus = async () => {
+    if (role !== 'ROLE_ADMIN' || !token) return;
     try {
-      const res = await fetch(`${API_BASE}/api/notifications/cached/${searchEventId}`, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
+      const res = await fetch(`${NOTIFICATION_API}/api/simulation/fault-status`, {
+        headers: { 'Authorization': `Bearer ${token}` },
+        cache: 'no-store'
       });
-
-      if (res.status === 404) {
-        throw new Error(`Event ID "${searchEventId}" not found or expired.`);
+      if (res.ok) {
+        const data = await res.json();
+        setFaultModeActive(data.faultModeActive);
       }
-      if (!res.ok) {
-        throw new Error('Access denied. Token invalid.');
-      }
+    } catch (e) {}
+  };
 
-      const data = await res.json();
-      setCachedEvent(data);
-    } catch (err: any) {
-      setError(err.message);
+  const fetchDlqEvents = async () => {
+    if (role !== 'ROLE_ADMIN' || !token) return;
+    try {
+      setDlqLoading(true);
+      const res = await fetch(`${NOTIFICATION_API}/api/dlq/events`, {
+        headers: { 'Authorization': `Bearer ${token}` },
+        cache: 'no-store'
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setDlqEvents(data);
+      }
     } finally {
-      setLoading(false);
+      setDlqLoading(false);
     }
   };
 
-  return (
-    <div className="min-h-screen w-full bg-black text-slate-100 flex items-center justify-center p-4 sm:p-6 bg-[radial-gradient(ellipse_80%_80%_at_50%_-20%,rgba(220,38,38,0.12),rgba(0,0,0,0))]">
-      {!isLoggedIn ? (
-        /* ULTRA-MODERN BLACK & RED SECURE GATEWAY PANEL */
-        <div className="bg-zinc-950 border border-zinc-800 rounded-2xl shadow-2xl p-8 w-full max-w-md backdrop-blur-md">
-          <div className="flex items-center gap-4 mb-8">
-            <div className="p-3 bg-red-600/10 text-red-500 rounded-xl border border-red-500/20 shadow-[0_0_15px_rgba(220,38,38,0.15)]">
-              <Shield size={26} />
-            </div>
-            <div>
-              <h1 className="text-xl font-bold tracking-tight text-white uppercase">Secure Gateway</h1>
-              <p className="text-zinc-500 text-xs font-mono">Stateless Cluster Node</p>
-            </div>
-          </div>
+  const fetchAuditLogs = async () => {
+    if (role !== 'ROLE_ADMIN' || !token) return;
+    try {
+      setAuditLoading(true);
+      const url = new URL(`${NOTIFICATION_API}/api/audit/logs`);
+      if (auditQuery) url.searchParams.append('query', auditQuery);
+      if (auditStatus !== 'ALL') url.searchParams.append('status', auditStatus);
+      if (auditChannel !== 'ALL') url.searchParams.append('channel', auditChannel);
 
-          <form onSubmit={handleLogin} className="space-y-5">
-            <div className="space-y-2">
-              <label className="block text-zinc-400 text-xs font-semibold uppercase tracking-wider">Username Identity</label>
-              <input 
-                type="text"
-                placeholder="Enter identity (e.g., dhroov)"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                className="w-full bg-black border border-zinc-800 focus:border-red-600 rounded-xl px-4 py-3 text-sm text-slate-100 placeholder-zinc-700 outline-none transition-all duration-200"
+      const res = await fetch(url.toString(), {
+        headers: { 'Authorization': `Bearer ${token}` },
+        cache: 'no-store'
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setAuditLogs(data);
+      }
+    } finally {
+      setAuditLoading(false);
+    }
+  };
+
+  const toggleFaultMode = async () => {
+    try {
+      const res = await fetch(`${NOTIFICATION_API}/api/simulation/toggle-fault`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ active: !faultModeActive })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setFaultModeActive(data.faultModeActive);
+      }
+    } catch (e) {}
+  };
+
+  const replayDlqEvents = async () => {
+    try {
+      await fetch(`${NOTIFICATION_API}/api/dlq/replay`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      fetchDlqEvents();
+      if (activeTab === 'audit') fetchAuditLogs();
+    } catch (e) {}
+  };
+
+  useEffect(() => {
+    if (isLoggedIn && role === 'ROLE_ADMIN') {
+      fetchFaultStatus();
+      fetchDlqEvents();
+      if (activeTab === 'audit') {
+        fetchAuditLogs();
+      }
+      const interval = setInterval(() => {
+        fetchDlqEvents();
+        if (activeTab === 'audit') {
+          fetchAuditLogs();
+        }
+      }, 5000);
+      return () => clearInterval(interval);
+    }
+  }, [isLoggedIn, role, token, activeTab, auditQuery, auditStatus, auditChannel]);
+
+  const handleRegistration = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setRegStatus({ loading: true, error: null, success: false });
+
+    try {
+      const payload = {
+        name: studentName,
+        email: studentEmail,
+        rollNumber: studentRoll,
+        department: studentDept,
+        channel: selectedChannel,
+        templateType: selectedTemplate
+      };
+
+      const res = await fetch(`${REGISTRY_API}/api/students`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}` 
+        },
+        body: JSON.stringify(payload)
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => null);
+        throw new Error(errorData?.message || 'Registration failed. Check uniqueness constraints.');
+      }
+
+      setRegStatus({ loading: false, error: null, success: true });
+      setTimeout(() => setRegStatus(s => ({ ...s, success: false })), 3000);
+      
+      setStudentName('');
+      setStudentEmail('');
+      setStudentRoll('');
+      setStudentDept('');
+    } catch (err: any) {
+      setRegStatus({ loading: false, error: err.message, success: false });
+    }
+  };
+
+  if (!isLoggedIn) {
+    return (
+      <LoginView
+        username={username}
+        setUsername={setUsername}
+        password={password}
+        setPassword={setPassword}
+        authError={authError}
+        googleLoading={googleLoading}
+        handleLogin={handleLogin}
+        handleGoogleLogin={handleGoogleLogin}
+      />
+    );
+  }
+
+  return (
+    <div className="min-h-screen w-full bg-black text-zinc-100 flex flex-col font-mono justify-between">
+      
+      {/* SHARED HEADER */}
+      <Header
+        isConnected={isConnected}
+        role={role}
+        activeTab={activeTab}
+        setActiveTab={setActiveTab}
+        handleLogout={handleLogout}
+      />
+
+      {activeTab === 'cockpit' ? (
+        /* COCKPIT NODE LAYOUT */
+        <div className="flex-1 grid grid-cols-1 lg:grid-cols-2 gap-px bg-zinc-900">
+          
+          {/* LEFT ZONE: APP 1 - STUDENT REGISTRY & QUARANTINE */}
+          <section className="bg-black p-6 md:p-10 flex flex-col items-center relative overflow-y-auto h-[calc(100vh-130px)]">
+            <RegistryNode
+              studentName={studentName}
+              setStudentName={setStudentName}
+              studentEmail={studentEmail}
+              setStudentEmail={setStudentEmail}
+              studentRoll={studentRoll}
+              setStudentRoll={setStudentRoll}
+              studentDept={studentDept}
+              setStudentDept={setStudentDept}
+              selectedChannel={selectedChannel}
+              setSelectedChannel={setSelectedChannel}
+              selectedTemplate={selectedTemplate}
+              setSelectedTemplate={setSelectedTemplate}
+              regStatus={regStatus}
+              handleRegistration={handleRegistration}
+              role={role}
+            />
+
+            {role === 'ROLE_ADMIN' && (
+              <QuarantineZone
+                faultModeActive={faultModeActive}
+                toggleFaultMode={toggleFaultMode}
+                dlqEvents={dlqEvents}
+                replayDlqEvents={replayDlqEvents}
+                dlqLoading={dlqLoading}
               />
-            </div>
-            <button type="submit" className="w-full bg-red-600 hover:bg-red-500 text-white active:scale-[0.98] transition-all duration-150 py-3 rounded-xl font-medium text-sm tracking-wide uppercase shadow-lg shadow-red-600/15">
-              Generate JWT Token
-            </button>
-          </form>
-          {error && <div className="mt-4 p-3 bg-red-500/10 border border-red-500/20 text-red-400 text-xs rounded-xl font-mono text-center">{error}</div>}
+            )}
+          </section>
+
+          {/* RIGHT ZONE: APP 2 - LIVE INGESTION STREAM */}
+          <section className="bg-black p-6 md:p-10 flex flex-col relative overflow-hidden h-[calc(100vh-130px)]">
+            <LiveFeed liveEvents={liveEvents} />
+          </section>
+
         </div>
       ) : (
-        /* CYBER-RED CORE DASHBOARD SYSTEM */
-        <div className="w-full max-w-4xl space-y-6">
-          {/* HEADER ROW */}
-          <div className="bg-zinc-950 border border-zinc-800 p-6 rounded-2xl shadow-xl flex flex-col sm:flex-row gap-4 justify-between sm:items-center backdrop-blur-md">
-            <div className="flex items-center gap-4">
-              <div className="p-3 bg-red-500/10 text-red-500 rounded-xl border border-red-500/20">
-                <Bell size={22} />
-              </div>
-              <div>
-                <h1 className="text-lg font-bold tracking-tight text-white uppercase tracking-wide">Notification Hub</h1>
-                <p className="text-red-500 text-xs font-mono flex items-center gap-1.5 mt-0.5 uppercase tracking-wider">
-                  <span className="h-1.5 w-1.5 rounded-full bg-red-500 animate-pulse shadow-[0_0_8px_rgba(220,38,38,1)]" /> Session Live
-                </p>
-              </div>
-            </div>
-            <button onClick={handleLogout} className="flex items-center justify-center gap-2 bg-zinc-900 hover:bg-zinc-800 active:scale-95 transition-all px-4 py-2.5 rounded-xl text-xs font-semibold text-zinc-300 border border-zinc-800 uppercase tracking-wider">
-              <LogOut size={14} /> Disconnect
-            </button>
-          </div>
-
-          {/* TWO COLUMN GRID PANEL */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {/* SIDE PANEL INTERROGATION CONTROLS */}
-            <div className="md:col-span-1 bg-zinc-950 border border-zinc-800 p-6 rounded-2xl shadow-xl space-y-5 h-fit">
-              <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-wider flex items-center gap-2">
-                <Terminal size={14} className="text-red-500" /> Cache Interrogator
-              </h2>
-              <div className="space-y-2">
-                <label className="block text-zinc-400 text-xs font-medium uppercase tracking-wider">Target Event ID</label>
-                <input 
-                  type="text"
-                  value={searchEventId}
-                  onChange={(e) => setSearchEventId(e.target.value)}
-                  className="w-full bg-black border border-zinc-800 focus:border-red-600 rounded-xl px-3 py-2.5 text-xs text-slate-200 font-mono outline-none transition-all"
-                />
-              </div>
-              <button 
-                onClick={fetchCachedNotification}
-                disabled={loading}
-                className="w-full bg-red-600 hover:bg-red-500 text-white disabled:bg-zinc-900 disabled:text-zinc-700 active:scale-[0.97] transition-all py-2.5 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 shadow-md uppercase tracking-wider"
-              >
-                <RefreshCw size={12} className={loading ? 'animate-spin' : ''} /> Query Redis Tier
-              </button>
-              {error && <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-400 text-xs rounded-xl font-mono leading-relaxed text-center">{error}</div>}
-            </div>
-
-            {/* LIVE DATA INGESTION DISPLAY */}
-            <div className="md:col-span-2 bg-zinc-950 border border-zinc-800 p-6 rounded-2xl shadow-xl flex flex-col min-h-[340px]">
-              <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-wider flex items-center gap-2 mb-5">
-                <Layers size={14} className="text-red-500" /> Ingested Event Details
-              </h2>
-              
-              {cachedEvent ? (
-                <div className="space-y-5 flex-1">
-                  {/* META LABELS BLOCK */}
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 bg-black border border-zinc-800 p-4 rounded-xl font-mono text-[11px] leading-tight">
-                    <div className="space-y-1">
-                      <span className="text-zinc-500 block text-[9px] uppercase tracking-wider">EVENT REFERENCE</span>
-                      <span className="text-red-500 font-bold bg-red-500/5 border border-red-500/10 px-2 py-0.5 rounded md:inline-block">{cachedEvent.eventId}</span>
-                    </div>
-                    <div className="space-y-1">
-                      <span className="text-zinc-500 block text-[9px] uppercase tracking-wider">CHANNEL DRIVER</span>
-                      <span className="text-white font-bold bg-zinc-900 border border-zinc-800 px-2 py-0.5 rounded md:inline-block">{cachedEvent.channel}</span>
-                    </div>
-                    <div className="space-y-1">
-                      <span className="text-zinc-500 block text-[9px] uppercase tracking-wider">RECIPIENT MATRIX</span>
-                      <span className="text-slate-300 font-medium overflow-x-auto block whitespace-nowrap scrollbar-none">{cachedEvent.recipient}</span>
-                    </div>
-                  </div>
-
-                  {/* SUBSTANCE WRAPPER BOX */}
-                  <div className="bg-black/40 border border-zinc-800 p-5 rounded-xl flex-1 space-y-3">
-                    <h3 className="text-sm font-bold text-white border-b border-zinc-800 pb-2 uppercase tracking-wide">{cachedEvent.messageSubject}</h3>
-                    <p className="text-zinc-400 text-xs leading-relaxed font-normal">{cachedEvent.messageBody}</p>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex-1 flex flex-col items-center justify-center text-zinc-600 border border-dashed border-zinc-800 rounded-xl p-8 font-mono text-xs text-center bg-black/20">
-                  <span className="text-red-500/30 mb-2 block text-lg font-sans">⚠️</span>
-                  NO EVENT IN MEMORY BUFFER
-                  <span className="text-[10px] text-zinc-700 block mt-1">Specify active reference and trigger query execution</span>
-                </div>
-              )}
-            </div>
-          </div>
+        /* AUDIT TRAIL VIEW */
+        <div className="flex-1 overflow-y-auto h-[calc(100vh-130px)] flex flex-col bg-black">
+          <AuditLogs
+            auditLogs={auditLogs}
+            auditQuery={auditQuery}
+            setAuditQuery={setAuditQuery}
+            auditStatus={auditStatus}
+            setAuditStatus={setAuditStatus}
+            auditChannel={auditChannel}
+            setAuditChannel={setAuditChannel}
+            auditLoading={auditLoading}
+            fetchAuditLogs={fetchAuditLogs}
+            inspectedLog={inspectedLog}
+            setInspectedLog={setInspectedLog}
+          />
         </div>
       )}
+
+      {/* SHARED FOOTER */}
+      <Footer />
+
     </div>
   );
 }

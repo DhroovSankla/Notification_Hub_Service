@@ -32,11 +32,17 @@ public class SecurityConfig {
                 // Turn off basic stateful session recording inside the server memory layer
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
 
-                // Set access permissions criteria mapping rules
+                 // Set access permissions criteria mapping rules
                 .authorizeHttpRequests(auth -> auth
+                        .requestMatchers(org.springframework.http.HttpMethod.OPTIONS, "/**").permitAll() // Allow preflight CORS
                         .requestMatchers("/api/auth/**").permitAll() // Allow public login/register routes without tokens
+                        .requestMatchers("/ws-notifications/**").permitAll() // Allow WebSockets
+                        .requestMatchers("/h2-console/**").permitAll() // Allow H2 database console access
+                        .requestMatchers("/api/simulation/**", "/api/dlq/**", "/api/audit/**").hasAuthority("ROLE_ADMIN")
                         .anyRequest().authenticated()               // All other endpoints require a valid token signature
-                );
+                )
+                // Disable frameOptions so that H2 console frames can load in browser
+                .headers(headers -> headers.frameOptions(frame -> frame.disable()));
 
         // Inject our custom JWT validation handler *before* the traditional username/password filter runs
         http.addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
@@ -49,7 +55,7 @@ public class SecurityConfig {
         CorsConfiguration configuration = new CorsConfiguration();
         configuration.setAllowedOrigins(List.of("http://localhost:5173")); // Front-end Vite port
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
-        configuration.setAllowedHeaders(List.of("Authorization", "Content-Type", "Cache-Control"));
+        configuration.setAllowedHeaders(List.of("Authorization", "Content-Type", "Cache-Control", "Pragma", "Accept", "Origin", "X-Requested-With"));
         configuration.setAllowCredentials(true);
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
